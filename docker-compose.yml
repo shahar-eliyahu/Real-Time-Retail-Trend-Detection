@@ -1,0 +1,77 @@
+services:
+  kafka:
+    image: apache/kafka:3.8.1
+    container_name: kafka
+    ports:
+      - "9094:9094"   # optional: lets scripts running on your own machine connect via localhost:9094
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+
+  create-topic:
+    image: apache/kafka:3.8.1
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command: >
+      sh -c "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic retail_stream --partitions 1 --replication-factor 1 &&
+               /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic trend_scores --partitions 1 --replication-factor 1 &&
+               /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic stream_control --partitions 1 --replication-factor 1 &&
+               /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic stream_status --partitions 1 --replication-factor 1"
+
+  consumer:
+    build: .
+    image: retail-trend-detection
+    container_name: consumer
+    depends_on:
+      create-topic:
+        condition: service_completed_successfully
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+    ports:
+      - "4040:4040"   # Spark UI: http://localhost:4040
+    command: python spark_streaming_consumer.py
+
+  producer:
+    image: retail-trend-detection
+    container_name: producer
+    depends_on:
+      create-topic:
+        condition: service_completed_successfully
+      consumer:
+        condition: service_started
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      AUTO_START: "false"   # wait for Start in the dashboard
+    command: python producer_simulation.py
+
+  dashboard:
+    image: retail-trend-detection
+    container_name: dashboard
+    depends_on:
+      create-topic:
+        condition: service_completed_successfully
+      consumer:
+        condition: service_started
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      NAMES_PATH: /app/product_trend_labels.csv
+    working_dir: /app/dashboard
+    ports:
+      - "8000:8000"   # dashboard: http://localhost:8000
+    command: uvicorn app:app --host 0.0.0.0 --port 8000 --log-level warning

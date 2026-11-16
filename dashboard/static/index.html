@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Retail Trend Radar</title>
+<style>
+  :root {
+    --bg: #0a0e16; --panel: #111725; --panel-2: #161e2f; --border: #222c40;
+    --text: #e6e9ef; --muted: #8590a6; --faint: #4b5569;
+    --hot: #ff7a45; --warm: #ffb547; --cool: #5b8def;
+    --good: #3ecf8e; --bad: #f2676b;
+    --row: 50px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; font-size: 14px; }
+  .mono { font-family: "Cascadia Mono", "SF Mono", Consolas, ui-monospace, monospace; }
+
+  header { display: flex; align-items: center; gap: 16px; padding: 14px 24px;
+    border-bottom: 1px solid var(--border); }
+  .logo { width: 30px; height: 30px; border-radius: 8px; background: var(--hot);
+    display: grid; place-items: center; }
+  h1 { font-size: 18px; font-weight: 600; margin: 0; letter-spacing: .2px; }
+  .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .spacer { flex: 1; }
+  .status { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+  .status.live .dot { background: var(--good); animation: pulse 1.6s infinite; }
+  .status.live { color: var(--text); }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  .metric-inline { text-align: right; }
+  .metric-inline b { font-size: 16px; font-weight: 600; }
+  .metric-inline span { display: block; color: var(--muted); font-size: 11px; }
+
+  .controls { display: flex; align-items: center; gap: 14px; padding: 12px 24px; border-bottom: 1px solid var(--border); background: #0d121c; }
+  .btn { border: 1px solid var(--border); background: var(--panel-2); color: var(--text); border-radius: 9px;
+    padding: 8px 16px; font: inherit; font-weight: 600; cursor: pointer; transition: background .15s, border-color .15s; }
+  .btn:hover { border-color: #33405c; }
+  .btn.primary { background: var(--hot); border-color: var(--hot); color: #1a0d06; min-width: 120px; }
+  .btn.primary:hover { background: #ff8d5e; }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .seg { display: flex; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+  .seg button { border: 0; background: transparent; color: var(--muted); font: inherit; font-weight: 600;
+    padding: 8px 13px; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button.on { background: var(--panel-2); color: var(--text); }
+  .seg button:disabled { cursor: default; opacity: .45; }
+  .progress { flex: 1; display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .ptrack { flex: 1; height: 8px; border-radius: 4px; background: var(--panel-2); overflow: hidden; }
+  .pfill { height: 100%; width: 0; background: var(--cool); transition: width .8s; }
+  .ptext { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .state { font-weight: 600; font-size: 13px; white-space: nowrap; }
+  .state.running { color: var(--good); } .state.paused { color: var(--warm); }
+  .state.waiting, .state.offline { color: var(--muted); } .state.finished { color: var(--cool); }
+
+  main { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 16px; padding: 16px 24px 24px; }
+  .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; min-width: 0; }
+  .card-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; gap: 12px; }
+  .card-head h2 { font-size: 15px; font-weight: 600; margin: 0; }
+  .card-head .hint { color: var(--muted); font-size: 12px; }
+
+  /* ---------- leaderboard ---------- */
+  .board-cols, .row { display: grid; grid-template-columns: 34px minmax(0, 1fr) 96px 150px 44px; align-items: center; gap: 12px; }
+  .board-cols { color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; padding: 0 10px 8px; }
+  .board { position: relative; }
+  .row { position: absolute; left: 0; right: 0; height: calc(var(--row) - 6px); padding: 0 10px; border-radius: 10px;
+    background: var(--panel-2); border: 1px solid transparent; cursor: pointer;
+    transition: top .7s cubic-bezier(.2,.8,.2,1), opacity .5s, border-color .2s, background .2s; }
+  .row:hover { border-color: var(--border); }
+  .row.selected { border-color: var(--hot); background: #1d1a1c; }
+  .row.enter { opacity: 0; }
+  .rank { font-size: 18px; font-weight: 700; color: var(--muted); text-align: center; }
+  .rank.top { color: var(--text); }
+  .pname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+  .pmeta { display: flex; gap: 6px; align-items: center; margin-top: 3px; font-size: 11px; color: var(--muted); }
+  .badge { padding: 1px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600; letter-spacing: .3px; }
+  .badge.new { background: rgba(255,122,69,.18); color: var(--hot); }
+  .badge.streak { background: rgba(133,144,166,.14); color: #aab3c5; font-weight: 500; }
+  .scorebar { display: flex; align-items: center; gap: 8px; }
+  .track { flex: 1; height: 6px; border-radius: 3px; background: #0c111b; overflow: hidden; }
+  .fill { height: 100%; border-radius: 3px; transition: width .7s, background .7s; }
+  .scoreval { width: 38px; text-align: right; font-weight: 600; }
+  .change { text-align: center; font-size: 12px; font-weight: 600; }
+  .up { color: var(--good); } .down { color: var(--bad); } .same { color: var(--faint); }
+  .empty { color: var(--muted); padding: 40px 0; text-align: center; }
+
+  /* ---------- detail ---------- */
+  .detail-stats { display: flex; gap: 22px; margin-bottom: 10px; }
+  .detail-stats div span { display: block; color: var(--muted); font-size: 11px; }
+  .detail-stats div b { font-size: 18px; font-weight: 600; }
+  .legend { display: flex; gap: 14px; color: var(--muted); font-size: 11px; margin-top: 6px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+
+  /* ---------- live stream ---------- */
+  .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .tile { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; }
+  .tile span { color: var(--muted); font-size: 12px; }
+  .tile b { display: block; font-size: 24px; font-weight: 600; margin-top: 4px; }
+  .feed-row { display: grid; grid-template-columns: 82px minmax(0, 1fr) 92px 22px; gap: 10px; align-items: center;
+    padding: 7px 4px; border-bottom: 1px solid #1a2233; font-size: 12.5px; }
+  .feed-row.fresh { animation: flash 1.2s ease-out; }
+  @keyframes flash { from { background: rgba(255,122,69,.18) } to { background: transparent } }
+  .feed-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .feed-name small { color: var(--muted); margin-left: 6px; }
+  .pill { justify-self: end; padding: 2px 8px; border-radius: 999px; font-weight: 600; font-size: 11.5px; }
+  .ok { color: var(--good); } .miss { color: var(--bad); }
+  .feed { max-height: 520px; overflow: hidden; }
+
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0a0e16" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 17 9 11 13 15 21 7"/><polyline points="15 7 21 7 21 13"/></svg></div>
+  <div>
+    <h1>Retail Trend Radar</h1>
+    <div class="sub">Kafka · Spark Structured Streaming · Random Forest · predicts demand bursts within 10 days</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="metric-inline"><b id="kAlerts">–</b><span>alerts</span></div>
+  <div class="metric-inline"><b id="kPrec">–</b><span>precision so far</span></div>
+  <div class="metric-inline"><b id="kRec">–</b><span>recall so far</span></div>
+  <div class="status" id="status"><div class="dot"></div><span id="statusText">Connecting</span></div>
+</header>
+
+<div class="controls">
+  <button class="btn primary" id="mainBtn" disabled>Start</button>
+  <div class="seg" id="speedSeg">
+    <button data-speed="1">1x</button><button data-speed="5">5x</button><button data-speed="20">20x</button>
+  </div>
+  <span class="state offline" id="simState">Producer offline</span>
+  <div class="progress">
+    <div class="ptrack"><div class="pfill" id="pFill"></div></div>
+    <span class="ptext mono" id="pText">–</span>
+  </div>
+</div>
+
+<main>
+  <!-- left: who is the next trend -->
+  <section class="col">
+    <div class="card">
+      <div class="card-head">
+        <h2>Next trends</h2>
+        <span class="hint">Trend score = 60% today's probability + 40% momentum · fades when a product goes quiet</span>
+      </div>
+      <div class="board-cols"><span>#</span><span>Product</span><span>Last 20 days</span><span>Trend score</span><span>Δ</span></div>
+      <div class="board" id="board"><div class="empty">Press Start to begin streaming. Products need about a month of history before they get a score.</div></div>
+    </div>
+
+    <div class="card" id="detail">
+      <div class="card-head">
+        <h2 id="dTitle">Following</h2>
+        <span class="hint mono" id="dPid"></span>
+      </div>
+      <div class="detail-stats">
+        <div><span>Trend score</span><b id="dScore">–</b></div>
+        <div><span>Rank</span><b id="dRank">–</b></div>
+        <div><span>Streak above 0.25</span><b id="dStreak">–</b></div>
+        <div><span>Last scored day</span><b id="dDay" class="mono" style="font-size:15px">–</b></div>
+      </div>
+      <svg id="dChart" width="100%" height="190" viewBox="0 0 700 190" preserveAspectRatio="none"></svg>
+      <div class="legend">
+        <span><i style="background:#2f3a52"></i>Daily transactions</span>
+        <span><i style="background:var(--hot)"></i>Trend probability</span>
+        <span><i style="background:transparent;border:1px dashed var(--muted)"></i>Alert threshold 0.25</span>
+        <span><i style="background:var(--good)"></i>Real trend (label)</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- right: live stream -->
+  <section class="col">
+    <div class="tiles">
+      <div class="tile"><span>Simulated date</span><b class="mono" id="tDate">–</b></div>
+      <div class="tile"><span>Transactions / sec</span><b id="tRate">–</b></div>
+      <div class="tile"><span>Transactions streamed</span><b id="tTotal">–</b></div>
+      <div class="tile"><span>Products tracked</span><b id="tTracked">–</b></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Stream throughput</h2><span class="hint">last 60 seconds</span></div>
+      <svg id="rateChart" width="100%" height="90" viewBox="0 0 600 90" preserveAspectRatio="none"></svg>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Live model scores</h2><span class="hint" id="scoredCount"></span></div>
+      <div class="feed" id="feed"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const ROW = 50;
+let selected = null;
+const seenFeed = new Set();
+const rows = new Map();
+
+const $ = id => document.getElementById(id);
+const fmt = n => n == null ? "–" : n.toLocaleString("en-US");
+const pct = v => v == null ? "–" : Math.round(v * 100) + "%";
+const titleCase = s => (s || "").toLowerCase().replace(/\b([a-z])/g, c => c.toUpperCase());
+const nameOf = (name, pid) => name ? titleCase(name) : "Product " + pid;
+
+function heat(v) {
+  const t = Math.max(0, Math.min(1, v));
+  if (t < 0.25) return "#5b8def";
+  if (t < 0.5) return "#ffb547";
+  return "#ff7a45";
+}
+
+function spark(values) {
+  const w = 96, h = 26;
+  if (!values.length) return "";
+  const step = values.length > 1 ? w / (values.length - 1) : 0;
+  if (values.length === 1) return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><circle cx="${w - 3}" cy="${(h - 2 - values[0] * (h - 4)).toFixed(1)}" r="2.5" fill="${heat(values[0])}"/></svg>`;
+  const pts = values.map((v, i) => `${(i * step).toFixed(1)},${(h - 2 - v * (h - 4)).toFixed(1)}`).join(" ");
+  const ty = (h - 2 - 0.25 * (h - 4)).toFixed(1);
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+    <line x1="0" x2="${w}" y1="${ty}" y2="${ty}" stroke="#2a3550" stroke-dasharray="2 3"/>
+    <polyline points="${pts}" fill="none" stroke="${heat(values[values.length - 1])}" stroke-width="1.8" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+function renderBoard(board) {
+  const el = $("board");
+  if (!board.length) return;
+  el.querySelector(".empty")?.remove();
+  el.style.height = (board.length * ROW) + "px";
+  const keep = new Set();
+
+  board.forEach((p, i) => {
+    keep.add(p.pid);
+    let r = rows.get(p.pid);
+    if (!r) {
+      r = document.createElement("div");
+      r.className = "row enter";
+      r.style.top = (i * ROW) + "px";
+      r.onclick = () => select(p.pid);
+      el.appendChild(r);
+      rows.set(p.pid, r);
+      requestAnimationFrame(() => requestAnimationFrame(() => r.classList.remove("enter")));
+    }
+    r.style.top = (i * ROW) + "px";
+    r.classList.toggle("selected", p.pid === selected);
+
+    const badges = (p.new ? `<span class="badge new">NEW</span>` : "") +
+      (p.streak >= 3 ? `<span class="badge streak">${p.streak}-day streak</span>` : "");
+    const ch = p.change == null ? `<span class="same">·</span>`
+      : p.change > 0 ? `<span class="up">▲${p.change}</span>`
+      : p.change < 0 ? `<span class="down">▼${-p.change}</span>` : `<span class="same">–</span>`;
+
+    r.innerHTML = `
+      <div class="rank${i < 3 ? " top" : ""}">${i + 1}</div>
+      <div style="min-width:0">
+        <div class="pname">${nameOf(p.name, p.pid)}</div>
+        <div class="pmeta"><span class="mono">${p.pid}</span>${badges}</div>
+      </div>
+      <div>${spark(p.spark)}</div>
+      <div class="scorebar">
+        <div class="track"><div class="fill" style="width:${Math.round(p.score * 100)}%;background:${heat(p.score)}"></div></div>
+        <span class="scoreval mono">${p.score.toFixed(2)}</span>
+      </div>
+      <div class="change">${ch}</div>`;
+  });
+
+  for (const [pid, r] of rows) {
+    if (!keep.has(pid)) {
+      r.style.opacity = "0";
+      rows.delete(pid);
+      setTimeout(() => r.remove(), 500);
+    }
+  }
+  if (!selected && board.length) select(board[0].pid);
+}
+
+function renderFeed(feed, total) {
+  $("scoredCount").textContent = fmt(total) + " product-days scored";
+  $("feed").innerHTML = feed.map(f => {
+    const key = f.pid + "|" + f.day;
+    const fresh = !seenFeed.has(key);
+    seenFeed.add(key);
+    const bg = f.alert ? "rgba(255,122,69,.16)" : "rgba(133,144,166,.12)";
+    const fg = f.alert ? "var(--hot)" : "var(--muted)";
+    return `<div class="feed-row${fresh ? " fresh" : ""}">
+      <span class="mono" style="color:var(--muted)">${f.day}</span>
+      <span class="feed-name">${nameOf(f.name, f.pid)}<small class="mono">${f.pid}</small></span>
+      <span class="pill mono" style="background:${bg};color:${fg}">${f.alert ? "ALERT " : ""}${f.p.toFixed(2)}</span>
+      <span class="${f.correct ? "ok" : "miss"}" title="${f.correct ? "prediction matched the label" : "prediction missed the label"}">${f.correct ? "✓" : "✗"}</span>
+    </div>`;
+  }).join("");
+  if (seenFeed.size > 5000) seenFeed.clear();
+}
+
+function renderRate(hist) {
+  const w = 600, h = 90, max = Math.max(10, ...hist);
+  const step = w / (hist.length - 1);
+  const pts = hist.map((v, i) => `${(i * step).toFixed(1)},${(h - 4 - (v / max) * (h - 14)).toFixed(1)}`);
+  $("rateChart").innerHTML = `
+    <polygon points="0,${h} ${pts.join(" ")} ${w},${h}" fill="rgba(91,141,239,.14)"/>
+    <polyline points="${pts.join(" ")}" fill="none" stroke="#5b8def" stroke-width="2" vector-effect="non-scaling-stroke"/>
+    <text x="4" y="12" fill="#8590a6" font-size="11">${max} / sec</text>`;
+}
+
+function renderDetail(d) {
+  $("dTitle").textContent = "Following: " + nameOf(d.name, d.pid);
+  $("dPid").textContent = d.pid;
+  $("dScore").textContent = d.score.toFixed(2);
+  $("dScore").style.color = heat(d.score);
+  $("dRank").textContent = d.rank ? "#" + d.rank : "out of top";
+  $("dStreak").textContent = d.streak + (d.streak === 1 ? " day" : " days");
+  const hist = d.history;
+  $("dDay").textContent = hist.length ? hist[hist.length - 1].day : "–";
+
+  const W = 700, H = 190, top = 10, bottom = 160, n = hist.length;
+  if (!n) { $("dChart").innerHTML = ""; return; }
+  const bw = Math.min(W / n, 28), maxTx = Math.max(1, ...hist.map(x => x.tx));
+  const yP = p => bottom - p * (bottom - top);
+  let s = "";
+  hist.forEach((x, i) => {
+    const bh = (x.tx / maxTx) * (bottom - top) * 0.85;
+    s += `<rect x="${(i * bw + bw * 0.15).toFixed(1)}" y="${(bottom - bh).toFixed(1)}" width="${(bw * 0.7).toFixed(1)}" height="${bh.toFixed(1)}" fill="#2f3a52" rx="1"/>`;
+    if (x.y === 1) s += `<rect x="${(i * bw).toFixed(1)}" y="${bottom + 6}" width="${Math.max(1, bw).toFixed(1)}" height="6" fill="#3ecf8e"/>`;
+  });
+  s += `<line x1="0" x2="${W}" y1="${yP(0.25)}" y2="${yP(0.25)}" stroke="#8590a6" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>`;
+  const pts = hist.map((x, i) => `${(i * bw + bw / 2).toFixed(1)},${yP(x.p).toFixed(1)}`).join(" ");
+  s += `<polyline points="${pts}" fill="none" stroke="#ff7a45" stroke-width="2.2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
+  if (n <= 30) hist.forEach((x, i) => { s += `<circle cx="${(i * bw + bw / 2).toFixed(1)}" cy="${yP(x.p).toFixed(1)}" r="3" fill="#ff7a45"/>`; });
+  s += `<text x="2" y="${H - 2}" fill="#8590a6" font-size="11">${hist[0].day}</text>`;
+  if (n > 1) s += `<text x="${(n * bw - 2).toFixed(1)}" y="${H - 2}" fill="#8590a6" font-size="11" text-anchor="end">${hist[n - 1].day}</text>`;
+  $("dChart").innerHTML = s;
+}
+
+async function loadDetail() {
+  if (!selected) return;
+  try {
+    const r = await fetch("/api/product/" + encodeURIComponent(selected));
+    if (r.ok) renderDetail(await r.json());
+  } catch (e) {}
+}
+
+function select(pid) {
+  selected = pid;
+  history.replaceState(null, "", "#" + encodeURIComponent(pid));
+  for (const [id, r] of rows) r.classList.toggle("selected", id === pid);
+  loadDetail();
+}
+
+let producerState = null, pending = false;
+
+async function sendCommand(body) {
+  pending = true;
+  $("mainBtn").disabled = true;
+  try {
+    await fetch("/api/control", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  } catch (e) {}
+  setTimeout(() => { pending = false; }, 1200);
+}
+
+$("mainBtn").onclick = () => {
+  const action = { waiting: "start", running: "pause", paused: "resume" }[producerState];
+  if (action) sendCommand({ action });
+};
+document.querySelectorAll("#speedSeg button").forEach(b => {
+  b.onclick = () => sendCommand({ action: "speed", speed: Number(b.dataset.speed) });
+});
+
+function renderControls(p) {
+  const btn = $("mainBtn"), st = $("simState");
+  producerState = p ? p.state : null;
+  const labels = { waiting: "Start", running: "Pause", paused: "Resume", finished: "Finished" };
+  const states = { waiting: "Ready", running: "Streaming", paused: "Paused", finished: "Finished" };
+  btn.textContent = p ? labels[p.state] : "Start";
+  btn.disabled = pending || !p || p.state === "finished";
+  st.className = "state " + (p ? p.state : "offline");
+  st.textContent = p ? states[p.state] + (p.state === "running" ? " · " + p.speed + "x" : "") : "Producer offline";
+  document.querySelectorAll("#speedSeg button").forEach(b => {
+    b.classList.toggle("on", !!p && Number(b.dataset.speed) === p.speed);
+    b.disabled = !p || p.state === "finished";
+  });
+  if (p) {
+    const frac = p.total ? p.sent / p.total : 0;
+    $("pFill").style.width = (frac * 100).toFixed(1) + "%";
+    $("pText").textContent = `${fmt(p.sent)} / ${fmt(p.total)} rows · ${Math.round(frac * 100)}%` + (p.sim_date ? ` · up to ${p.sim_date}` : "");
+  } else {
+    $("pText").textContent = "waiting for the producer container…";
+  }
+}
+
+function render(s) {
+  renderControls(s.producer);
+  $("tDate").textContent = s.sim_date || "–";
+  $("tRate").textContent = fmt(s.rate);
+  $("tTotal").textContent = fmt(s.total_tx);
+  $("tTracked").textContent = fmt(s.tracked);
+  $("kAlerts").textContent = fmt(s.alerts);
+  $("kPrec").textContent = pct(s.precision);
+  $("kRec").textContent = pct(s.recall);
+  renderRate(s.rate_history);
+  renderBoard(s.board);
+  renderFeed(s.feed, s.total_scored);
+}
+
+function connect() {
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
+  ws.onopen = () => { $("status").classList.add("live"); $("statusText").textContent = "Live"; };
+  ws.onmessage = e => render(JSON.parse(e.data));
+  ws.onclose = () => {
+    $("status").classList.remove("live"); $("statusText").textContent = "Reconnecting";
+    setTimeout(connect, 2000);
+  };
+}
+
+if (location.hash.length > 1) selected = decodeURIComponent(location.hash.slice(1));
+connect();
+loadDetail();
+setInterval(loadDetail, 2000);
+</script>
+</body>
+</html>

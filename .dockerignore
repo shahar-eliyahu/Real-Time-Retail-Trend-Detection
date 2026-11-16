@@ -1,0 +1,9 @@
+*
+!requirements.txt
+!producer_simulation.py
+!spark_streaming_consumer.py
+!cleaned_retail_data_with_Y.csv
+!cleaned_retail_data_with_Y.csv.gz
+!trend_rf_model
+!product_trend_labels.csv
+!dashboard

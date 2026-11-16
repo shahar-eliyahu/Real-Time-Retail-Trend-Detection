@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project: generated locally, not versioned
+cleaned_retail_data_with_Y.csv
+online_retail_II.xlsx
+checkpoint/
+spark-warehouse/
+metastore_db/
+derby.log

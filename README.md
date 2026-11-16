@@ -1,54 +1,166 @@
 # Real-Time Trend Detection in E-Commerce Streams
 
-*Detecting emerging product trends from a live transaction stream using Apache Kafka, Spark Structured Streaming, and a Random Forest classifier.*
+*Detecting emerging product trends from a live transaction stream with Apache Kafka, Spark Structured Streaming and a Random Forest classifier, with a live web dashboard.*
 
-**Course:** Big Data Analysis &nbsp;|&nbsp; **Stack:** Apache Kafka · PySpark 3.5 · Python · Random Forest · Structured Streaming
+**Course:** Big Data Analysis &nbsp;|&nbsp; **Stack:** Apache Kafka · PySpark 3.5 · Spark ML · FastAPI · WebSocket · Docker
+
+![Retail Trend Radar dashboard](docs/dashboard.png)
 
 ---
 
 ## Project Overview
 
-Traditional batch processing systems suffer from data freshness issues — insights are often computed hours or days after a trend has already peaked. The core challenge lies in distinguishing true emerging trends from noisy fluctuations in a highly imbalanced environment.
+Batch analytics usually surface a trend only after it has already peaked. The challenge is to separate real emerging trends from noisy fluctuations in a highly imbalanced setting.
 
-This system addresses the problem by enabling immediate detection. The pipeline ingests a stream of transactions via Apache Kafka, maintains per-product historical state using Spark Structured Streaming, computes up to 45 behavioral features incrementally, and applies a trained Random Forest model to generate alerts in real time.
+This system replays real e-commerce transactions into Kafka, keeps per-product history with Spark Structured Streaming, computes 45 behavioral features incrementally, and scores every completed product-day with a pre-trained Random Forest. The model predicts whether a product will have a demand burst **within the next 10 days**. A live dashboard ranks the products most likely to trend next and lets you control the simulation.
 
-The system processes data in near real time using micro-batches, enabling fast reaction to emerging trends.
+Data: [Online Retail II](https://archive.ics.uci.edu/dataset/502/online+retail+ii), a UK online retailer, December 2009 to December 2011.
 
 ![Total transactions per day across the dataset](images/eda_transactions_per_day.png)
-*Daily transaction volume across the full dataset — the underlying activity the streaming pipeline monitors per product.*
+*Daily transaction volume across the full dataset, the activity the streaming pipeline monitors per product.*
 
 ---
 
 ## System Architecture
 
+![System architecture](docs/architecture.png)
+
+| Component | What it does |
+|---|---|
+| **Producer** (`producer_simulation.py`) | Replays the 794K cleaned transactions into `retail_stream` in random bursts. Waits for **Start** from the dashboard and follows pause, resume and speed commands from `stream_control`. Reports its progress on `stream_status`. |
+| **Kafka** | Single broker in KRaft mode. Data topics: `retail_stream`, `trend_scores`. Control topics: `stream_control`, `stream_status`. |
+| **Spark Structured Streaming** (`spark_streaming_consumer.py`) | Parses the stream with a 1-day watermark. `applyInPandasWithState` keeps each product's daily history, computes the 45 features and scores them with the Random Forest. Every 10 seconds `foreachBatch` publishes all scores to `trend_scores` and prints the alerts (p_trend ≥ 0.25). |
+| **Dashboard** (`dashboard/`) | FastAPI service that reads `trend_scores`, `stream_status` and `retail_stream`, keeps the ranking state and pushes a snapshot to the browser every second over WebSocket. Sends control commands to `stream_control`. |
+| **Offline training** (`Final_project.ipynb`) | Cleaning, labeling, feature engineering, model selection and evaluation. Produces `trend_rf_model/` and the cleaned dataset that the producer replays. |
+
+**Design points**
+
+- **Complete days only.** A day's transactions can arrive across several micro-batches. The open day is accumulated in state and scored once the product's next day arrives, so every score uses the full day, like the training data.
+- **Training/serving parity.** The streaming features reproduce the notebook's Spark window features exactly: same windows over previous active days, sample standard deviation, Spark weekday numbering, `percentile_approx` semantics and the same minimum-history rule (31 active days). This was verified row-by-row against the training code.
+- **Fault tolerance.** Kafka offsets and the per-product state are checkpointed to `checkpoint/retail_streaming`.
+- **Ground truth in the demo.** `Y` travels with the simulated stream only so the dashboard can show whether each prediction matched reality.
+
+---
+
+## Quick Start (Windows, macOS, Linux)
+
+Everything runs in Docker, so there is nothing else to install: no Java, Spark, Kafka or Python setup.
+
+### 1. Prerequisites
+
+Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and start it. On Windows it uses WSL 2, which the installer sets up. Wait until Docker Desktop shows **Engine running**. Give Docker at least 4 GB of memory (Settings → Resources).
+
+### 2. Get the code
+
+```bash
+git clone https://github.com/shahar-eliyahu/real-time-retail-trend-detection.git
+cd real-time-retail-trend-detection
 ```
-Producer (producer_simulation.py)
-        |
-        v
-  Kafka Topic: retail_stream
-        |
-        v
-  Spark Structured Streaming
-    |-- withWatermark ("ts", "1 day")
-    |-- applyInPandasWithState (60-day history per product)
-    |-- RandomForest Model (Inference)
-        |
-        v
-  Alerts: ProductID | Day | Y
+
+### 3. Build and start everything
+
+```bash
+docker compose up --build
 ```
 
-**Key components:**
+This starts Kafka, creates the four topics, builds the Spark image, and starts the Spark consumer, the producer and the dashboard. The first build takes about 5 to 10 minutes because it downloads Java, Spark and the Kafka connector. Later starts take seconds.
 
-- **Apache Kafka** – Unified under `retail_stream`.
-- **Fault Tolerance** – Checkpoints are persisted in `checkpoint/retail_streaming` for recovery.
-- **Watermarking** – A 1-day watermark is included as a foundation for handling late-arriving data, while the current simulation mostly produces ordered events.
-- **Stateful Processing** – Uses `applyInPandasWithState` to compute momentum and Z-scores without full recomputation.
+The system is ready when the log shows `waiting for Start from the dashboard`.
 
-> **Implementation choice:** We used `applyInPandasWithState` instead of the standard `mapGroupsWithState`. In our PySpark environment, this approach provided better stability and allowed for more seamless integration with our Pandas-based feature engineering logic.
+### 4. Open the dashboard and press Start
+
+Open **http://localhost:8000** and press **Start**. Nothing is streamed until you do. Products need about a month of simulated history before they get their first score, so the leaderboard fills after a few minutes at 1x, or within a minute at 20x.
+
+### Everyday commands
+
+| Task | Command |
+|---|---|
+| Start (build only the first time or after code changes) | `docker compose up --build` |
+| Start in the background | `docker compose up -d` (then stop with `docker compose down`) |
+| Follow the alerts printed by Spark | `docker compose logs -f consumer` |
+| Follow the producer | `docker compose logs -f producer` |
+| See what is running | `docker compose ps` |
+| Stop | `Ctrl+C`, then `docker compose down` |
+| Run again from the beginning | `docker compose up` |
+| Stop and delete the downloaded and built images | `docker compose down --rmi all` |
+
+### Addresses
+
+| Service | URL |
+|---|---|
+| Dashboard | http://localhost:8000 |
+| Spark UI | http://localhost:4040 |
+| Kafka from your own machine | `localhost:9094` |
+
+You can also open the dashboard already following a product, for example http://localhost:8000/#20726.
+
+### Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `docker` is not recognized | Start Docker Desktop, then open a new terminal. |
+| The consumer stops with a memory error | Raise Docker's memory to 4 GB or more (Settings → Resources). |
+| `port is already allocated` (8000, 4040 or 9094) | Another program uses the port. Stop it, or change the left side of the port mapping in `docker-compose.yml`, for example `"8080:8000"`. |
+| The dashboard says *Producer offline* | The producer container is still starting or has stopped. Check it with `docker compose logs producer`. |
+| The leaderboard stays empty after Start | Wait a few minutes, or switch to 20x. Products are scored only after 31 active days. |
+
+### Running without Docker (optional)
+
+Kafka can stay in Docker while the Python parts run on your machine. This needs Python 3.11 and Java 17. Spark runs best on Linux, macOS or WSL; native Windows needs extra Hadoop setup.
+
+```bash
+docker compose up -d kafka create-topic
+pip install -r requirements.txt
+
+# terminal 1: Spark consumer
+KAFKA_BOOTSTRAP=localhost:9094 python spark_streaming_consumer.py
+
+# terminal 2: dashboard
+cd dashboard && KAFKA_BOOTSTRAP=localhost:9094 NAMES_PATH=../product_trend_labels.csv uvicorn app:app --port 8000
+
+# terminal 3: producer (AUTO_START=false makes it wait for Start in the dashboard)
+KAFKA_BOOTSTRAP=localhost:9094 AUTO_START=false python producer_simulation.py
+```
+
+On Windows PowerShell, set each variable first, for example `$env:KAFKA_BOOTSTRAP="localhost:9094"`, then run the command.
+
+### Re-running the notebook (optional)
+
+The repository already contains the trained model and a compressed copy of the cleaned dataset (`cleaned_retail_data_with_Y.csv.gz`). To reproduce them, download `online_retail_II.xlsx` from the [UCI repository](https://archive.ics.uci.edu/dataset/502/online+retail+ii) into the project folder and run:
+
+```bash
+pip install -r requirements.txt jupyter openpyxl matplotlib
+jupyter notebook Final_project.ipynb
+```
+
+The notebook writes `cleaned_retail_data_with_Y.csv`, `product_trend_labels.csv` and `trend_rf_model/`. The producer uses the uncompressed CSV when it exists.
+
+---
+
+## Using the Dashboard
+
+![Dashboard guide](docs/dashboard-guide.png)
+
+1. **Simulation controls.** **Start** begins streaming, then the same button switches between **Pause** and **Resume**. **1x / 5x / 20x** sets the replay speed. Commands go to the producer through Kafka.
+2. **Progress.** Simulation state, rows streamed out of 794K, and the latest transaction date sent.
+3. **Model accuracy so far.** Total alerts (scores ≥ 0.25), and running precision and recall against the real labels. *Live* means the browser is connected.
+4. **Next trends.** The 15 products most likely to trend, ranked by **trend score**: `0.6 × today's p_trend + 0.4 × previous score`. The score drops 15% for every simulated day without a new score. A product that keeps scoring high stays at the top, and a one-off spike fades quickly. A brand-new product enters with its first score. Click a row to follow that product.
+5. **Product badges.** Product code, `NEW` for a product that entered the top 15 in the last two simulated days, and the streak of consecutive scored days above the 0.25 alert threshold.
+6. **Trend columns.** Sparkline of the last 20 probabilities (dotted line = 0.25 threshold), the trend score bar, and Δ, the rank change since the previous simulated day.
+7. **Following.** History of the selected product: bars are daily transactions, the orange line is the model's trend probability, the dashed line is the alert threshold, and green marks the days that really were trends. It keeps following the product even after it leaves the top 15.
+8. **Live stream.** Simulated date, transactions per second, transactions streamed, and products the model has scored so far.
+9. **Stream throughput.** Transactions per second over the last 60 seconds. The dips are pauses.
+10. **Live model scores.** Every scored product-day as it arrives: date, product, probability (orange `ALERT` at 0.25 or more), and ✓ or ✗ for whether the prediction matched the label.
+
+The ranking updates in steps of about 10 seconds, the interval of Spark's micro-batches. Restarting only the dashboard replays `trend_scores` from the beginning, so the ranking is rebuilt and nothing is lost.
 
 ---
 
 ## Machine Learning & Model Experiments
+
+**Label.** A product-day is `Y = 1` if a significant demand burst occurs within the next **H = 10 days**: a minimum volume, deviation from recent and long-term behavior, and a minimum number of unique customers. All statistics use past data only. Positive rate: 10% of product-days.
+
+**Split.** Chronological: train before 2011-08-15, validation until 2011-10-01, test after.
 
 ### Stage-1: Candidate Detection (Validation)
 
@@ -61,24 +173,17 @@ Several classifiers were evaluated on the validation set. Random Forest achieved
 | HistGradientBoosting | 0.30 | 0.5537 | 0.9233 | 0.6922 | 18,618 |
 | XGBoost | 0.30 | 0.5568 | 0.9177 | 0.6931 | 18,400 |
 
-GBT, HistGradientBoosting, and XGBoost were evaluated as alternative Stage-1 candidates using the same train/validation split (their training cells are kept commented out in the notebook to avoid re-running expensive experiments, with results summarized here).
+GBT, HistGradientBoosting and XGBoost were evaluated with the same train/validation split. Their training cells are commented out in the notebook to avoid re-running expensive experiments.
 
 ![Top 10 feature importances from the Random Forest model](images/feature_importance_rf.png)
-*The rolling 90th-percentile and 7-day rolling mean of daily transactions are the strongest signals for the Random Forest model.*
+*The rolling 90th percentile and the 7-day rolling mean of daily transactions are the strongest signals.*
 
 ![Distribution of three engineered features split by label](images/feature_distributions_by_label.png)
-*Trending (Y=1) and non-trending (Y=0) product-days separate more clearly on `dist_to_p90` than on the two rolling-ratio features, consistent with it ranking among the top features above.*
-
----
+*Trending (Y=1) and non-trending (Y=0) product-days separate most clearly on `dist_to_p90`.*
 
 ### Stage-2: False Positive Filtering (Validation)
 
-To further improve precision, a two-stage approach was explored:
-
-- **Stage-1** generates candidates with high recall (captures most trends).
-- **Stage-2** filters false positives among those candidates.
-
-While Random Forest was also used in Stage-1, its reuse in Stage-2 is intentional. In Stage-1 the model serves as a high-recall filter, whereas in Stage-2 it is retrained on a more challenging subset of data to refine predictions and reduce false positives. This multi-stage approach allows the same model architecture to specialize in different tasks across the pipeline.
+A second stage was explored to improve precision: Stage-1 produces high-recall candidates, and a Stage-2 model retrained on those harder cases filters false positives.
 
 | Model | Precision | Recall | F1 | Alerts |
 |---|---|---|---|---|
@@ -86,271 +191,58 @@ While Random Forest was also used in Stage-1, its reuse in Stage-2 is intentiona
 | Logistic Regression | 0.7290 | 0.9424 | 0.8221 | 6,782 |
 | GBT | 0.7591 | 0.8180 | 0.7874 | 5,653 |
 
-**Random Forest was selected as the Stage-2 model** based on F1 score, with a final threshold of 0.35.
-
 ![Stage-2 precision, recall and F1 across candidate thresholds](images/stage2_threshold_tuning.png)
-*Threshold sweep for the Stage-2 Random Forest model — 0.35 sits at the F1 peak before recall starts dropping off.*
+*Threshold sweep for the Stage-2 Random Forest: 0.35 sits at the F1 peak.*
 
----
-
-### Final Evaluation on Test Set
+### Final Evaluation on the Test Set
 
 | Pipeline | Precision | Recall | F1 | Alerts |
 |---|---|---|---|---|
-| Stage-1 only | 0.5780 | 0.8811 | 0.6980 | 38,122 |
-| Two-Stage pipeline | 0.5802 | 0.8763 | 0.6982 | 37,771 |
+| **Stage-1 only (deployed)** | 0.5780 | 0.8811 | 0.6980 | 38,122 |
+| Two-stage pipeline | 0.5802 | 0.8763 | 0.6982 | 37,771 |
 
-When evaluated on the held-out test set, the two-stage pipeline achieved very similar performance to Stage-1 alone, with only a marginal improvement in F1 score (0.6982 vs 0.6980). The two-stage pipeline slightly reduced the number of false positives and total alerts (by ~350 alerts), indicating a modest refinement of predictions.
+![Example of a labeled trending product over time](images/trend_example_product.png)
+*Daily transactions, rolling mean and rolling 90th percentile for a product labeled as trending.*
 
----
+### Architecture Decision
 
-### Results Summary
+On unseen data the second stage brought no meaningful gain (F1 0.6982 vs 0.6980). The deployed system therefore uses the **single Random Forest** (100 trees, depth 6, threshold 0.25) for a simpler pipeline and lower latency.
 
 | Metric | Value |
 |---|---|
-| Final Test F1 | 0.698 |
+| Test F1 | 0.698 |
 | Recall | 0.881 |
 | Precision | 0.578 |
-| Total Features | 45 |
-| Positive Rate | 10.0% |
-| Prediction Horizon | H = 10 days |
-
-The positive rate is 10.0% at the product-day level (used for model construction). After merging back to the transaction level, it appears higher (43%) because all individual transactions on a labeled trend day inherit the positive label.
-
-![Example of a labeled trending product over time](images/trend_example_product.png)
-*Daily transactions, rolling mean, and rolling 90th percentile for a product flagged as trending (Y=1) — the signal the labeling logic and the model are built around.*
+| Features | 45 |
+| Positive rate | 10.0% of product-days |
+| Prediction horizon | 10 days |
 
 ---
 
-## Architecture Decision
-
-Since the second stage provided no measurable improvement on unseen data, the final system uses a **single Random Forest model**. This simplifies the pipeline without any loss in performance.
-
-Although the two-stage pipeline was tested to reduce false positives, the final evaluation on unseen test data showed that **Stage-1 (Random Forest) already captures the trend dynamics effectively (F1 ≈ 0.70)**. To minimize system complexity and reduce inference latency in a production environment, the single-stage model was selected for final deployment.
-
----
-
-## Real-Time Data Streaming Setup & Execution
-
-Before running the project, ensure that all required components are installed and properly configured.
-
-This project depends on:
-
-- Apache Kafka (3.2.1)
-- Apache Spark (3.5.x)
-- Python (Anaconda recommended)
-- Python packages: `pandas`, `pyarrow`, `kafka-python`, `openpyxl`
-
-> **Note:** Replace the placeholders below with your local paths:
-> - `<kafka_path>` – path to Kafka directory
-> - `<spark_path>` – path to Spark directory
-> - `<project_folder>` – path to the project directory
-
-Example:
-
-- `<kafka_path> = ~/kafka_2.13-3.2.1`
-- `<spark_path> = ~/spark`
-- `<project_folder> = ~/projects/real-time-trends`
-
----
-
-### 1. Clean Environment (Recommended)
-
-If Spark or Python were previously installed, clean conflicting settings:
-
-```bash
-unset SPARK_HOME
-unset PYTHONPATH
-```
-
----
-
-### 2. Install Python Dependencies
-
-```bash
-pip install pandas pyarrow kafka-python openpyxl
-```
-
-*(If using Conda: `conda install pandas`)*
-
----
-
-### 3. Install Apache Kafka (if not installed)
-
-```bash
-wget https://archive.apache.org/dist/kafka/3.2.1/kafka_2.13-3.2.1.tgz
-tar -xzf kafka_2.13-3.2.1.tgz
-```
-
----
-
-### 4. Install Apache Spark (if not installed)
-
-```bash
-wget https://archive.apache.org/dist/spark/spark-3.5.3/spark-3.5.3-bin-hadoop3.tgz
-tar -xzf spark-3.5.3-bin-hadoop3.tgz
-mv spark-3.5.3-bin-hadoop3 ~/spark
-```
-
----
-
-### 5. Configure Spark Environment
-
-```bash
-export SPARK_HOME=<spark_path>
-export PATH=$SPARK_HOME/bin:$PATH
-```
-
-Verify installation:
-
-```bash
-spark-submit --version
-```
-
----
-
-### 6. Configure Python for Spark
-
-Ensure Spark uses the correct Python environment:
-
-```bash
-export PYSPARK_PYTHON=$(which python)
-export PYSPARK_DRIVER_PYTHON=$(which python)
-```
-
-Verify libraries:
-
-```bash
-python -c "import pandas; print(pandas.__version__)"
-python -c "import pyarrow; print(pyarrow.__version__)"
-```
-
----
-
-### 7. Important Notes
-
-- Kafka and Spark versions must be compatible.
-- Topic name must match (`retail_stream`).
-- If errors occur, re-run environment cleaning.
-
----
-
-## Streaming Pipeline Execution
-
-The following steps describe how to run the real-time streaming pipeline end-to-end.
-
-To run a fresh simulation, first verify that the `checkpoint/` directory does not exist. If it does, delete it before proceeding.
-
-Spark uses this directory to persist streaming state and offsets between runs. If not deleted, the consumer will resume from the last checkpoint instead of starting from scratch.
-
-All steps must be executed in separate terminal windows, strictly in the following order:
-
----
-
-### Terminal 1 – ZooKeeper
-
-```bash
-cd <kafka_path>
-bin/zookeeper-server-start.sh config/zookeeper.properties
-```
-
----
-
-### Terminal 2 – Kafka Broker
-
-```bash
-cd <kafka_path>
-bin/kafka-server-start.sh config/server.properties
-```
-
----
-
-### Terminal 3 – Create Topic (first time only)
-
-```bash
-cd <kafka_path>
-bin/kafka-topics.sh --list --bootstrap-server localhost:9092
-bin/kafka-topics.sh --create \
-  --topic retail_stream \
-  --bootstrap-server localhost:9092 \
-  --partitions 1 \
-  --replication-factor 1
-```
-
-> Skip topic creation if it already exists.
-
----
-
-### Terminal 4 – Spark Consumer
-
-```bash
-cd <project_folder>
-
-unset PYSPARK_DRIVER_PYTHON
-unset PYSPARK_DRIVER_PYTHON_OPTS
-
-$SPARK_HOME/bin/spark-submit \
-  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3 \
-  spark_streaming_consumer.py
-```
-
----
-
-### Terminal 5 – Producer
-
-```bash
-cd <project_folder>
-python3 producer_simulation.py
-```
-
----
-
-## Example Real-Time Output
-
-The following output is printed by the Spark consumer (`spark_streaming_consumer.py`) for each processed micro-batch.
+## Project Structure
 
 ```
--------------------------------------------
-Batch: 22
--------------------------------------------
-+----------+---------+---+
-|Day       |ProductID|Y  |
-+----------+---------+---+
-|2010-05-19|20675    |1  |
-|2010-05-19|20711    |1  |
-|2010-05-18|20749    |1  |
-|2010-05-18|15044A   |0  |
-|2010-05-18|21121    |1  |
-|2010-05-19|21125    |0  |
-|2010-05-18|21155    |1  |
-+----------+---------+---+
+├── docker-compose.yml              Kafka, topics, Spark consumer, producer, dashboard
+├── Dockerfile                      Python 3.11 + Java 17 + PySpark image
+├── requirements.txt
+├── producer_simulation.py          Kafka producer with start / pause / speed control
+├── spark_streaming_consumer.py     Stateful features + Random Forest scoring
+├── dashboard/
+│   ├── app.py                      FastAPI + WebSocket backend, trend score logic
+│   └── static/index.html           Single-page dashboard
+├── trend_rf_model/                 Trained Spark ML Random Forest
+├── cleaned_retail_data_with_Y.csv.gz   Cleaned, labeled transactions replayed by the producer
+├── product_trend_labels.csv        Product names and product-level labels
+├── Final_project.ipynb             Full offline pipeline: EDA, labels, features, training
+├── images/                         Notebook charts
+└── docs/                           Architecture diagram and dashboard screenshots
 ```
-
----
-
-## Proposal vs. Implementation
-
-| Feature | Original Proposal | Final Implementation | Justification |
-|---|---|---|---|
-| Time Analysis | Fixed Windows (1/5/10 min) | Adaptive Stateful | Captures trends across boundaries |
-| Evaluation | System Latency/Accuracy | ML Metrics (F1-Score) | Focus on prediction quality |
-| Segmentation | Customer Clustering | Product-level Trends | Focus on core problem |
-| TTL | Automatic State Eviction | Bounded History (60 days) | Simpler and stable |
-| Late Data | Watermarking/Event-time | Ordered simulation + watermark | Controlled environment with future support |
 
 ---
 
 ## Limitations & Future Work
 
-- **Heuristic Labels:** Trends are defined by statistical thresholds rather than manual ground truth.
-- **False Positives:** The system may generate alerts during sudden but short-lived spikes. Future work involves refining noise filters.
-- **Local Scope:** Deployed on a single machine. The design is extensible to distributed clusters by scaling Kafka partitions and Spark executors.
-- **Feature Simplification:** A small subset of advanced features was simplified in the online inference pipeline. The full feature set was explored in the offline modeling stage.
-
----
-
-## Conclusion
-
-This project demonstrates how combining stateful streaming with machine learning enables a shift from reactive analytics to proactive, real-time decision-making. By eliminating the computing tax of full recomputation, the system provides a scalable and robust framework for modern data-driven e-commerce.
-
-The implementation successfully detects emerging product trends in real time, processing historical e-commerce transactions through an end-to-end streaming pipeline built in Python.
+- **Heuristic labels.** Trends are defined by statistical thresholds, not manual ground truth.
+- **False positives.** Short-lived spikes can still trigger alerts.
+- **One-day scoring delay.** A day is scored when the product's next active day arrives, so a product's last day in the stream is never scored.
+- **Single machine.** The design scales out by adding Kafka partitions and Spark executors.
